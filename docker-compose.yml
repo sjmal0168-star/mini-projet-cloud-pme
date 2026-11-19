@@ -1,0 +1,47 @@
+
+services:
+
+  catalogue:
+    build: ./catalogue
+    container_name: service-catalogue
+    ports:
+      - "5001:5001"
+    volumes:
+      - catalogue_data:/data
+    networks:
+      - cloud-network
+    restart: unless-stopped
+
+  commandes:
+    build: ./commandes
+    container_name: service-commandes
+    ports:
+      - "5002:5002"
+    volumes:
+      - commandes_data:/data
+    networks:
+      - cloud-network
+    depends_on:
+      - catalogue
+      - notifications
+    restart: unless-stopped
+
+  notifications:
+    build: ./notifications
+    container_name: service-notifications
+    ports:
+      - "5003:5003"
+    volumes:
+      - notifications_data:/data
+    networks:
+      - cloud-network
+    restart: unless-stopped
+
+volumes:
+  catalogue_data:
+  commandes_data:
+  notifications_data:
+
+networks:
+  cloud-network:
+    driver: bridge
