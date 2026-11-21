@@ -1,69 +1,107 @@
 
 from flask import Flask, request, jsonify
-import sqlite3
+from pymongo import MongoClient, ReturnDocument
 import os
 
 app = Flask(__name__)
 
-DB_PATH = "/data/notifications.db"
+# Connexion à MongoDB
+MONGO_URI = os.environ.get("MONGO_URI")
 
-# Création de la base de données
-def init_db():
-    os.makedirs("/data", exist_ok=True)
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=5000
+)
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS notifications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_id INTEGER,
-            message TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+db = client.get_default_database()
 
-# Recevoir et enregistrer une notification
-@app.route("/notify", methods=["POST"])
-def notify():
+# Collection des notifications
+notifications = db["notifications"]
 
-    data = request.get_json()
+# Collection des compteurs
+counters = db["counters"]
 
-    if not data or "order_id" not in data or "message" not in data:
-        return jsonify(error="Donnees manquantes"), 400
 
-    conn = sqlite3.connect(DB_PATH)
+# Génération automatique des IDs
+def get_next_id(collection_name):
 
-    cursor = conn.execute(
-        "INSERT INTO notifications (order_id, message) VALUES (?, ?)",
-        (data["order_id"], data["message"])
+    counter = counters.find_one_and_update(
+        {"_id": collection_name},
+        {"$inc": {"sequence_value": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER
     )
 
-    notification_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    return counter["sequence_value"]
 
-    return jsonify(
-        message="Notification enregistree",
-        notification_id=notification_id
-    ), 201
 
-# Afficher les notifications
+# Vérifier la connexion MongoDB
+def init_db():
+    client.admin.command("ping")
+
+
+# Route d'accueil
+@app.route("/", methods=["GET"])
+def home():
+
+    return jsonify({
+        "service": "Notifications",
+        "status": "running"
+    })
+
+
+# Ajouter une notification
+@app.route("/notify", methods=["POST"])
+def add_notification():
+
+    data = request.get_json(silent=True)
+
+    if not data:
+        return jsonify({
+            "error": "Données JSON manquantes"
+        }), 400
+
+    message = data.get("message")
+    order_id = data.get("order_id")
+
+    if not message:
+        return jsonify({
+            "error": "Le message est obligatoire"
+        }), 400
+
+    notification = {
+        "id": get_next_id("notifications"),
+        "order_id": order_id,
+        "message": message
+    }
+
+    # Enregistrer dans MongoDB
+    notifications.insert_one(notification)
+
+    return jsonify({
+        "message": "Notification enregistrée avec succès",
+        "notification": notification
+    }), 201
+
+
+# Récupérer toutes les notifications
 @app.route("/notifications", methods=["GET"])
 def get_notifications():
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    result = list(
+        notifications.find({}, {"_id": 0}).sort("id", 1)
+    )
 
-    notifications = conn.execute(
-        "SELECT * FROM notifications"
-    ).fetchall()
+    return jsonify(result), 200
 
-    conn.close()
 
-    return jsonify([dict(n) for n in notifications])
-
-init_db()
-
+# Lancement du service
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5003)
 
+    init_db()
+
+    app.run(
+        host="0.0.0.0",
+        port=5003,
+        debug=False
+    )

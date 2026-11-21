@@ -1,47 +1,125 @@
 
 services:
 
+  # =========================
+  # BASE DE DONNEES MONGODB
+  # =========================
+  mongodb:
+    image: mongo:8
+    container_name: mongodb
+    restart: unless-stopped
+
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+
+    ports:
+      - "27017:27017"
+
+    volumes:
+      - mongodb_data:/data/db
+
+    networks:
+      - cloud-network
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--username",
+          "${MONGO_ROOT_USERNAME}",
+          "--password",
+          "${MONGO_ROOT_PASSWORD}",
+          "--authenticationDatabase",
+          "admin",
+          "--eval",
+          "db.adminCommand('ping').ok"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # =========================
+  # SERVICE CATALOGUE
+  # =========================
   catalogue:
     build: ./catalogue
     container_name: service-catalogue
+    restart: unless-stopped
+
     ports:
       - "5001:5001"
-    volumes:
-      - catalogue_data:/data
-    networks:
-      - cloud-network
-    restart: unless-stopped
 
-  commandes:
-    build: ./commandes
-    container_name: service-commandes
-    ports:
-      - "5002:5002"
-    volumes:
-      - commandes_data:/data
+    environment:
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/${MONGO_CATALOGUE_DB}?authSource=admin
+
     networks:
       - cloud-network
+
     depends_on:
-      - catalogue
-      - notifications
-    restart: unless-stopped
+      mongodb:
+        condition: service_healthy
 
+  # =========================
+  # SERVICE NOTIFICATIONS
+  # =========================
   notifications:
     build: ./notifications
     container_name: service-notifications
-    ports:
-      - "5003:5003"
-    volumes:
-      - notifications_data:/data
-    networks:
-      - cloud-network
     restart: unless-stopped
 
-volumes:
-  catalogue_data:
-  commandes_data:
-  notifications_data:
+    ports:
+      - "5003:5003"
 
+    environment:
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/${MONGO_NOTIFICATIONS_DB}?authSource=admin
+
+    networks:
+      - cloud-network
+
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  # =========================
+  # SERVICE COMMANDES
+  # =========================
+  commandes:
+    build: ./commandes
+    container_name: service-commandes
+    restart: unless-stopped
+
+    ports:
+      - "5002:5002"
+
+    environment:
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD}@mongodb:27017/${MONGO_COMMANDES_DB}?authSource=admin
+      CATALOGUE_URL: http://catalogue:5001
+      NOTIFICATIONS_URL: http://notifications:5003
+
+    networks:
+      - cloud-network
+
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      catalogue:
+        condition: service_started
+      notifications:
+        condition: service_started
+
+# =========================
+# VOLUMES PERSISTANTS
+# =========================
+volumes:
+  mongodb_data:
+
+# =========================
+# RESEAU PERSONNALISE
+# =========================
 networks:
   cloud-network:
     driver: bridge

@@ -1,15 +1,67 @@
 
 from flask import Flask, request, jsonify
-import sqlite3
+from pymongo import MongoClient, ReturnDocument
 import os
 import requests
 
 app = Flask(__name__)
 
-DB_PATH = "/data/commandes.db"
+# =====================================
+# CONNEXION A MONGODB
+# =====================================
 
-CATALOGUE_URL = "http://catalogue:5001"
-NOTIFICATIONS_URL = "http://notifications:5003"
+MONGO_URI = os.environ.get("MONGO_URI")
+
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=5000
+)
+
+db = client.get_default_database()
+
+# Collection des commandes
+orders_collection = db["orders"]
+
+# Collection des compteurs
+counters_collection = db["counters"]
+
+# Adresses des microservices
+CATALOGUE_URL = os.environ.get(
+    "CATALOGUE_URL",
+    "http://catalogue:5001"
+)
+
+NOTIFICATIONS_URL = os.environ.get(
+    "NOTIFICATIONS_URL",
+    "http://notifications:5003"
+)
+
+
+# =====================================
+# GENERATION AUTOMATIQUE DES IDS
+# =====================================
+
+def get_next_id(collection_name):
+
+    counter = counters_collection.find_one_and_update(
+        {"_id": collection_name},
+        {"$inc": {"sequence_value": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER
+    )
+
+    return counter["sequence_value"]
+
+
+# =====================================
+# INITIALISATION DE MONGODB
+# =====================================
+
+def init_db():
+
+    client.admin.command("ping")
+
+    print("Connexion MongoDB réussie pour Commandes")
 
 
 # =====================================
@@ -18,6 +70,7 @@ NOTIFICATIONS_URL = "http://notifications:5003"
 
 @app.route("/", methods=["GET"])
 def home():
+
     return """
     <!DOCTYPE html>
     <html lang="fr">
@@ -210,39 +263,18 @@ def home():
 
 
 # =====================================
-# INITIALISATION DE LA BASE DE DONNEES
-# =====================================
-
-def init_db():
-
-    os.makedirs("/data", exist_ok=True)
-
-    conn = sqlite3.connect(DB_PATH)
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            product_id INTEGER,
-            product_name TEXT,
-            quantity INTEGER
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-
-# =====================================
 # CREER UNE COMMANDE
 # =====================================
 
 @app.route("/orders", methods=["POST"])
 def create_order():
 
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
     if not data:
-        return jsonify(error="Données JSON manquantes"), 400
+        return jsonify(
+            error="Données JSON manquantes"
+        ), 400
 
     product_id = data.get("product_id")
     quantity = data.get("quantity")
@@ -264,7 +296,9 @@ def create_order():
         )
 
         if response.status_code == 404:
-            return jsonify(error="Produit introuvable"), 404
+            return jsonify(
+                error="Produit introuvable"
+            ), 404
 
         response.raise_for_status()
 
@@ -276,23 +310,25 @@ def create_order():
             error="Service Catalogue indisponible"
         ), 503
 
-    # Enregistrer la commande
-    conn = sqlite3.connect(DB_PATH)
+    # =====================================
+    # ENREGISTRER LA COMMANDE DANS MONGODB
+    # =====================================
 
-    cursor = conn.execute(
-        """
-        INSERT INTO orders (product_id, product_name, quantity)
-        VALUES (?, ?, ?)
-        """,
-        (product_id, product["name"], quantity)
-    )
+    order_id = get_next_id("orders")
 
-    order_id = cursor.lastrowid
+    order = {
+        "id": order_id,
+        "product_id": product_id,
+        "product_name": product["name"],
+        "quantity": quantity
+    }
 
-    conn.commit()
-    conn.close()
+    orders_collection.insert_one(order)
 
-    # Envoyer une notification
+    # =====================================
+    # ENVOYER UNE NOTIFICATION
+    # =====================================
+
     try:
 
         requests.post(
@@ -305,7 +341,12 @@ def create_order():
         )
 
     except requests.RequestException:
-        pass
+
+        print("Impossible d'envoyer la notification")
+
+    # =====================================
+    # REPONSE
+    # =====================================
 
     return jsonify(
         message="Commande creee avec succes",
@@ -322,23 +363,26 @@ def create_order():
 @app.route("/orders", methods=["GET"])
 def get_orders():
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    orders = list(
+        orders_collection.find(
+            {},
+            {"_id": 0}
+        ).sort("id", 1)
+    )
 
-    orders = conn.execute(
-        "SELECT * FROM orders"
-    ).fetchall()
-
-    conn.close()
-
-    return jsonify([dict(o) for o in orders])
+    return jsonify(orders), 200
 
 
 # =====================================
 # DEMARRAGE DE L'APPLICATION
 # =====================================
 
-init_db()
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002)
+
+    init_db()
+
+    app.run(
+        host="0.0.0.0",
+        port=5002,
+        debug=False
+    )

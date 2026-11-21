@@ -1,75 +1,162 @@
 
-from flask import Flask, jsonify
-import sqlite3
+from flask import Flask, request, jsonify
+from pymongo import MongoClient, ReturnDocument
 import os
 
 app = Flask(__name__)
 
-DB_PATH = "/data/catalogue.db"
+# Connexion à MongoDB
+MONGO_URI = os.environ.get("MONGO_URI")
 
-# Création de la base de données
+client = MongoClient(
+    MONGO_URI,
+    serverSelectionTimeoutMS=5000
+)
+
+db = client.get_default_database()
+
+# Collection des produits
+products = db["products"]
+
+# Collection pour gérer les identifiants
+counters = db["counters"]
+
+
+# Génération automatique des IDs
+def get_next_id(collection_name):
+    counter = counters.find_one_and_update(
+        {"_id": collection_name},
+        {"$inc": {"sequence_value": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER
+    )
+    return counter["sequence_value"]
+
+
+# Initialisation de la base de données
 def init_db():
-    os.makedirs("/data", exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            price REAL NOT NULL
+    client.admin.command("ping")
+
+    # Ajouter les produits de départ si la collection est vide
+    if products.count_documents({}) == 0:
+
+        initial_products = [
+            {
+                "id": 1,
+                "name": "Savon naturel",
+                "price": 12.0
+            },
+            {
+                "id": 2,
+                "name": "Huile essentielle",
+                "price": 25.0
+            },
+            {
+                "id": 3,
+                "name": "Creme naturelle",
+                "price": 18.0
+            }
+        ]
+
+        products.insert_many(initial_products)
+
+        # Initialiser le compteur des produits
+        counters.update_one(
+            {"_id": "products"},
+            {"$max": {"sequence_value": 3}},
+            upsert=True
         )
-    """)
 
-    count = conn.execute(
-        "SELECT COUNT(*) FROM products"
-    ).fetchone()[0]
 
-    if count == 0:
-        conn.executemany(
-            "INSERT INTO products (name, price) VALUES (?, ?)",
-            [
-                ("Savon naturel", 12.0),
-                ("Huile essentielle", 25.0),
-                ("Creme naturelle", 18.0)
-            ]
-        )
+# Route d'accueil
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "service": "Catalogue",
+        "status": "running"
+    })
 
-    conn.commit()
-    conn.close()
 
-# Afficher tous les produits
+# Récupérer tous les produits
 @app.route("/products", methods=["GET"])
 def get_products():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
 
-    products = conn.execute(
-        "SELECT * FROM products"
-    ).fetchall()
+    result = list(
+        products.find({}, {"_id": 0}).sort("id", 1)
+    )
 
-    conn.close()
+    return jsonify(result), 200
 
-    return jsonify([dict(p) for p in products])
 
-# Afficher un produit par son identifiant
+# Récupérer un produit par son ID
 @app.route("/products/<int:product_id>", methods=["GET"])
 def get_product(product_id):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
 
-    product = conn.execute(
-        "SELECT * FROM products WHERE id = ?",
-        (product_id,)
-    ).fetchone()
-
-    conn.close()
+    product = products.find_one(
+        {"id": product_id},
+        {"_id": 0}
+    )
 
     if product is None:
-        return jsonify(error="Produit introuvable"), 404
+        return jsonify({
+            "error": "Produit introuvable"
+        }), 404
 
-    return jsonify(dict(product))
+    return jsonify(product), 200
 
-init_db()
 
+# Ajouter un nouveau produit
+@app.route("/products", methods=["POST"])
+def add_product():
+
+    data = request.get_json(silent=True)
+
+    if not data:
+        return jsonify({
+            "error": "Données JSON manquantes"
+        }), 400
+
+    name = data.get("name")
+    price = data.get("price")
+
+    if not name or price is None:
+        return jsonify({
+            "error": "Le nom et le prix sont obligatoires"
+        }), 400
+
+    try:
+        price = float(price)
+
+        if price < 0:
+            raise ValueError()
+
+    except (ValueError, TypeError):
+        return jsonify({
+            "error": "Prix invalide"
+        }), 400
+
+    product = {
+        "id": get_next_id("products"),
+        "name": name,
+        "price": price
+    }
+
+    products.insert_one(product)
+
+    return jsonify({
+        "message": "Produit ajouté avec succès",
+        "product": product
+    }), 201
+
+
+# Lancement du service
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+
+    init_db()
+
+    app.run(
+        host="0.0.0.0",
+        port=5001,
+        debug=False
+    )

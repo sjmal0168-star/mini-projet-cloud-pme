@@ -1,0 +1,54 @@
+
+name: Cloud Computing CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-and-test:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Recuperer le projet
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configurer les variables d'environnement
+        run: |
+          cat > .env << 'EOF'
+          MONGO_ROOT_USERNAME=admin
+          MONGO_ROOT_PASSWORD=ci-password-123
+          MONGO_CATALOGUE_DB=catalogue_db
+          MONGO_COMMANDES_DB=commandes_db
+          MONGO_NOTIFICATIONS_DB=notifications_db
+          EOF
+
+      - name: Verifier la configuration Docker
+        run: docker compose config
+
+      - name: Construire et demarrer les conteneurs
+        run: docker compose up -d --build
+
+      - name: Executer les tests automatiques
+        run: python tests/smoke_test.py
+
+      - name: Afficher les logs en cas de probleme
+        if: always()
+        run: docker compose logs
+
+      - name: Arreter les conteneurs
+        if: always()
+        run: docker compose down -v
