@@ -4,29 +4,29 @@ name: Cloud Computing CI/CD
 on:
   push:
     branches:
-      - main
-      - master
+      - bonus-3-ci-cd
 
   pull_request:
     branches:
       - main
-      - master
 
 jobs:
   build-and-test:
-
     runs-on: ubuntu-latest
 
     steps:
-      - name: Recuperer le projet
+      # 1. Recuperer le projet depuis GitHub
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Installer Python
+      # 2. Installer Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Configurer les variables d'environnement
+      # 3. Creer les variables d'environnement
+      - name: Configure environment variables
         run: |
           cat > .env << 'EOF'
           MONGO_ROOT_USERNAME=admin
@@ -36,19 +36,24 @@ jobs:
           MONGO_NOTIFICATIONS_DB=notifications_db
           EOF
 
-      - name: Verifier la configuration Docker
+      # 4. Verifier la configuration Docker Compose
+      - name: Validate Docker Compose
         run: docker compose config
 
-      - name: Construire et demarrer les conteneurs
+      # 5. Construire et demarrer les conteneurs
+      - name: Build and start containers
         run: docker compose up -d --build
 
-      - name: Executer les tests automatiques
+      # 6. Executer les tests automatiques
+      - name: Run automatic tests
         run: python tests/smoke_test.py
 
-      - name: Afficher les logs en cas de probleme
+      # 7. Afficher les logs
+      - name: Display logs
         if: always()
         run: docker compose logs
 
-      - name: Arreter les conteneurs
+      # 8. Arreter et supprimer les conteneurs de test
+      - name: Stop containers
         if: always()
         run: docker compose down -v
