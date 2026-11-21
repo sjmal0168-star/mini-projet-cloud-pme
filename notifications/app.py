@@ -5,7 +5,10 @@ import os
 
 app = Flask(__name__)
 
-# Connexion à MongoDB
+# =========================
+# CONNEXION A MONGODB
+# =========================
+
 MONGO_URI = os.environ.get("MONGO_URI")
 
 client = MongoClient(
@@ -22,7 +25,10 @@ notifications = db["notifications"]
 counters = db["counters"]
 
 
-# Génération automatique des IDs
+# =========================
+# GENERATION AUTOMATIQUE DES IDS
+# =========================
+
 def get_next_id(collection_name):
 
     counter = counters.find_one_and_update(
@@ -35,22 +41,34 @@ def get_next_id(collection_name):
     return counter["sequence_value"]
 
 
-# Vérifier la connexion MongoDB
+# =========================
+# INITIALISATION DE MONGODB
+# =========================
+
 def init_db():
+
     client.admin.command("ping")
 
+    print("Connexion MongoDB reussie pour Notifications")
 
-# Route d'accueil
+
+# =========================
+# ROUTE D'ACCUEIL
+# =========================
+
 @app.route("/", methods=["GET"])
 def home():
 
     return jsonify({
         "service": "Notifications",
         "status": "running"
-    })
+    }), 200
 
 
-# Ajouter une notification
+# =========================
+# AJOUTER UNE NOTIFICATION
+# =========================
+
 @app.route("/notify", methods=["POST"])
 def add_notification():
 
@@ -58,7 +76,7 @@ def add_notification():
 
     if not data:
         return jsonify({
-            "error": "Données JSON manquantes"
+            "error": "Donnees JSON manquantes"
         }), 400
 
     message = data.get("message")
@@ -75,27 +93,41 @@ def add_notification():
         "message": message
     }
 
-    # Enregistrer dans MongoDB
+    # Enregistrer la notification dans MongoDB
     notifications.insert_one(notification)
 
+    # CORRECTION :
+    # MongoDB ajoute automatiquement un champ _id de type ObjectId.
+    # On le supprime avant de retourner le resultat en JSON.
+    notification.pop("_id", None)
+
     return jsonify({
-        "message": "Notification enregistrée avec succès",
+        "message": "Notification enregistree avec succes",
         "notification": notification
     }), 201
 
 
-# Récupérer toutes les notifications
+# =========================
+# RECUPERER TOUTES LES NOTIFICATIONS
+# =========================
+
 @app.route("/notifications", methods=["GET"])
 def get_notifications():
 
     result = list(
-        notifications.find({}, {"_id": 0}).sort("id", 1)
+        notifications.find(
+            {},
+            {"_id": 0}
+        ).sort("id", 1)
     )
 
     return jsonify(result), 200
 
 
-# Lancement du service
+# =========================
+# LANCEMENT DU SERVICE
+# =========================
+
 if __name__ == "__main__":
 
     init_db()
